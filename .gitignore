@@ -1,0 +1,10 @@
+# Per-run transcripts and install logs - machine-specific, created at runtime.
+Logs/
+
+# Installers (e.g. a locally supplied Cisco Secure Client MSI) don't belong in the repo.
+*.msi
+*.exe
+*.msix
+*.zip
+
+.DS_Store
