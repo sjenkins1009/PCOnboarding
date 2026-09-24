@@ -3,8 +3,9 @@
     Entry point for the PC Onboarding application.
 
     Startup questions, then steps with on-screen progress and a transcript log:
-      1. Join the PC - chosen at startup: Microsoft Entra ID, an Active
-         Directory domain, or both (domain join + hybrid Entra join).
+      1. Rename the PC (optional) and join it - chosen at startup: Microsoft
+         Entra ID, an Active Directory domain, or both (domain join + hybrid
+         Entra join).
       2. Scan for and remove any installed Microsoft Office products
          (Click-to-Run, MSI, per-language ARP entries, and the OneNote
          for Windows 10 AppX package).
@@ -84,6 +85,18 @@ function Read-DomainName {
     return $name
 }
 
+function Read-NewComputerName {
+    # Returns $null to keep the current name. Windows computer names are 1-15
+    # letters, numbers, or hyphens, not all numbers, and no leading/trailing hyphen.
+    param([string]$CurrentName)
+    while ($true) {
+        $name = (Read-Host "Rename this PC? Current name is $CurrentName. Enter a new name, or press Enter to keep it").Trim()
+        if (-not $name -or $name -eq $CurrentName) { return $null }
+        if ($name -match '^(?![0-9]+$)(?!-)[A-Za-z0-9-]{1,15}(?<!-)$') { return $name }
+        Write-Host '  Names must be 1-15 letters, numbers, or hyphens, not all numbers, and can''t start or end with a hyphen.' -ForegroundColor Red
+    }
+}
+
 function Format-Minutes {
     param([int]$Minutes)
     if ($Minutes -lt 60) { return "$Minutes min" }
@@ -107,11 +120,17 @@ $summaryInstalled = [System.Collections.Generic.List[string]]::new()
 $summaryFailed = [System.Collections.Generic.List[string]]::new()
 $summaryJoined = [System.Collections.Generic.List[string]]::new()
 $restartNeeded = $false
+$renamed = $false
 $runCompleted = $false
 
 # --- Ask up front: default set only, or also optional apps? ---
 Write-Step 'PC Onboarding Setup'
 Write-Host 'Always runs: remove Office, remove preloaded Teams/new Outlook, remove McAfee, install Google Chrome Enterprise, install Adobe Acrobat Reader.'
+
+$joinStatus = Get-JoinStatus
+
+Write-Host ''
+$newName = Read-NewComputerName -CurrentName $env:COMPUTERNAME
 
 Write-Host ''
 Write-Host 'How should this PC be joined?'
@@ -127,6 +146,12 @@ $domainCredential = $null
 if ($joinChoice -in '2', '3') {
     $domainName = Read-DomainName
     $domainCredential = Get-Credential -Message "Account allowed to join computers to $domainName (e.g. CONTOSO\admin)"
+}
+
+# Renaming a PC that's already in a domain also renames its account in AD,
+# which needs domain rights - ask now rather than stall mid-run.
+if ($newName -and $joinStatus.DomainJoined -and -not $domainCredential) {
+    $domainCredential = Get-Credential -Message "Account allowed to rename computers in $($joinStatus.Domain) (e.g. CONTOSO\admin)"
 }
 
 Write-Host ''
@@ -156,55 +181,86 @@ if (Read-YesNo 'Also install any optional apps (Dropbox, Slack, Google Drive, Ci
 }
 
 try {
-    Write-Step 'PC Onboarding - Step 1: Join Device'
+    Write-Step 'PC Onboarding - Step 1: Rename and Join Device'
 
-    if (-not $joinChoice) {
-        Write-Host 'No join selected. Skipping.' -ForegroundColor Green
+    if (-not $newName -and -not $joinChoice) {
+        Write-Host 'No rename or join selected. Skipping.' -ForegroundColor Green
     }
-    elseif (-not (Test-JoinSupportedEdition)) {
+
+    # Windows Home can still be renamed, just not joined.
+    $joinSupported = $true
+    if ($joinChoice -and -not (Test-JoinSupportedEdition)) {
         Write-Host 'This PC is running Windows Home, which cannot join a domain or Microsoft Entra ID.' -ForegroundColor Red
         Write-Host 'Upgrade it to Windows Pro, then join it manually.' -ForegroundColor Red
         $summaryFailed.Add('Join device (Windows Home edition cannot be joined; upgrade to Pro)')
+        $joinSupported = $false
     }
-    else {
-        $joinStatus = Get-JoinStatus
 
-        # --- Domain join: options 2 and 3 ---
-        $domainReady = $false
-        if ($joinChoice -in '2', '3') {
-            if ($joinStatus.DomainJoined) {
-                Write-Host "Already joined to domain $($joinStatus.Domain). Skipping domain join." -ForegroundColor Green
-                $domainReady = $true
+    # Set once the rename has been dealt with (done, or folded into the domain
+    # join); $renamed is only set when it actually succeeded.
+    $renameHandled = $false
+
+    # --- Domain join: options 2 and 3 (also applies the rename, if one was asked for) ---
+    $domainReady = $false
+    if ($joinSupported -and $joinChoice -in '2', '3') {
+        if ($joinStatus.DomainJoined) {
+            Write-Host "Already joined to domain $($joinStatus.Domain). Skipping domain join." -ForegroundColor Green
+            $domainReady = $true
+        }
+        elseif ($WhatIf) {
+            $asName = if ($newName) { " as $newName" } else { '' }
+            Write-Host "[WhatIf] Would join domain $domainName$asName." -ForegroundColor DarkYellow
+            $renameHandled = [bool]$newName
+        }
+        else {
+            # Retry loop: a typo in the domain name or password, or the PC not
+            # yet being on the client's network/VPN, is the usual failure.
+            while ($true) {
+                $asName = if ($newName) { " as $newName" } else { '' }
+                Write-Host "Joining domain $domainName$asName..." -NoNewline
+                if ($domainCredential -and (Join-ADDomain -DomainName $domainName -Credential $domainCredential -NewName $newName)) {
+                    Write-Host ' Done (takes effect after restart).' -ForegroundColor Green
+                    $domainReady = $true
+                    if ($newName) { $renameHandled = $true; $renamed = $true }
+                    break
+                }
+                Write-Host ' FAILED.' -ForegroundColor Red
+                if (-not (Read-YesNo 'Try again (you can re-enter the domain name and account)?')) { break }
+                $domainName = Read-DomainName
+                $domainCredential = Get-Credential -Message "Account allowed to join computers to $domainName (e.g. CONTOSO\admin)"
             }
-            elseif ($WhatIf) {
-                Write-Host "[WhatIf] Would join domain $domainName." -ForegroundColor DarkYellow
+
+            if ($domainReady) {
+                $summaryJoined.Add("Domain: $domainName")
+                $restartNeeded = $true
             }
             else {
-                # Retry loop: a typo in the domain name or password, or the PC not
-                # yet being on the client's network/VPN, is the usual failure.
-                while ($true) {
-                    Write-Host "Joining domain $domainName..." -NoNewline
-                    if ($domainCredential -and (Join-ADDomain -DomainName $domainName -Credential $domainCredential)) {
-                        Write-Host ' Done (takes effect after restart).' -ForegroundColor Green
-                        $domainReady = $true
-                        break
-                    }
-                    Write-Host ' FAILED.' -ForegroundColor Red
-                    if (-not (Read-YesNo 'Try again (you can re-enter the domain name and account)?')) { break }
-                    $domainName = Read-DomainName
-                    $domainCredential = Get-Credential -Message "Account allowed to join computers to $domainName (e.g. CONTOSO\admin)"
-                }
-
-                if ($domainReady) {
-                    $summaryJoined.Add("Domain: $domainName")
-                    $restartNeeded = $true
-                }
-                else {
-                    $summaryFailed.Add("Join domain $domainName")
-                }
+                $summaryFailed.Add("Join domain $domainName")
             }
         }
+    }
 
+    # --- Rename on its own: no domain join this run, or the join failed ---
+    if ($newName -and -not $renameHandled) {
+        if ($WhatIf) {
+            Write-Host "[WhatIf] Would rename this PC to $newName." -ForegroundColor DarkYellow
+        }
+        else {
+            Write-Host "Renaming this PC to $newName..." -NoNewline
+            $renameCredential = if ($joinStatus.DomainJoined) { $domainCredential } else { $null }
+            if (Rename-Device -NewName $newName -DomainCredential $renameCredential) {
+                Write-Host ' Done (takes effect after restart).' -ForegroundColor Green
+                $renamed = $true
+                $restartNeeded = $true
+            }
+            else {
+                Write-Host ' FAILED.' -ForegroundColor Red
+                $summaryFailed.Add("Rename PC to $newName")
+            }
+        }
+    }
+
+    if ($joinSupported) {
         # --- Hybrid Entra join: option 3 ---
         # Can't be done directly from here: after the domain join takes effect,
         # Windows registers the device itself - but only if the client's
@@ -234,6 +290,11 @@ try {
                 Write-Host '[WhatIf] Would open the Microsoft Entra join screen.' -ForegroundColor DarkYellow
             }
             else {
+                if ($renamed) {
+                    # The new name only takes effect after the restart, so the
+                    # join below registers the device under the current name.
+                    Write-Host "Note: Entra ID may list this PC as $env:COMPUTERNAME until it restarts as $newName." -ForegroundColor Yellow
+                }
                 do {
                     Start-EntraJoin
                     Write-Host 'Settings > Access work or school is opening. In that window:' -ForegroundColor Yellow
@@ -575,7 +636,8 @@ finally {
     $billedMinutes = [int]([math]::Ceiling(($endTime - $startTime).TotalMinutes / 15) * 15)
 
     $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add("PC Onboarding Summary - $env:COMPUTERNAME")
+    $pcName = if ($renamed) { "$newName (renamed from $env:COMPUTERNAME)" } else { $env:COMPUTERNAME }
+    $lines.Add("PC Onboarding Summary - $pcName")
     $lines.Add("Start Time: $($startTime.ToString('M/d/yyyy h:mm tt'))")
     $lines.Add("End Time:   $($endTime.ToString('M/d/yyyy h:mm tt'))")
     $lines.Add("Runtime:    $(Format-Minutes $billedMinutes) (actual $(Format-Minutes $actualMinutes), rounded up to 15-min increments)")
@@ -625,7 +687,7 @@ finally {
     Write-Host "Summary saved to: $summaryPath"
 
     if ($restartNeeded) {
-        Write-Host "`nRESTART REQUIRED to finish joining this PC." -ForegroundColor Yellow
+        Write-Host "`nRESTART REQUIRED to finish renaming/joining this PC." -ForegroundColor Yellow
     }
 
     Stop-Transcript | Out-Null

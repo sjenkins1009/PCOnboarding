@@ -2,8 +2,9 @@
 
 PowerShell-based onboarding tool. Asks a few questions up front, then runs:
 
-1. Join the PC to Microsoft Entra ID, an Active Directory domain, or both
-   (chosen at startup — see [Device join](#device-join-step-1)).
+1. Optionally rename the PC, and join it to Microsoft Entra ID, an Active
+   Directory domain, or both (chosen at startup — see
+   [Rename and join](#rename-and-join-step-1)).
 2. Detect and remove all Microsoft Office installations.
 3. Detect and remove preloaded/consumer Teams and the new Outlook app.
    OneDrive is intentionally left in place.
@@ -37,7 +38,7 @@ ticket, **copies it to the clipboard**, and saves it as
 `Logs\Summary_<timestamp>.txt`:
 
 ```
-PC Onboarding Summary - DESKTOP-ABC123
+PC Onboarding Summary - CONTOSO-LT01 (renamed from DESKTOP-ABC123)
 Start Time: 9/24/2026 2:05 PM
 End Time:   9/24/2026 2:41 PM
 Runtime:    45 min (actual 36 min, rounded up to 15-min increments)
@@ -68,7 +69,7 @@ Failed (1):
 
 - `Run-Onboarding.cmd` — double-click launcher for `Start-Onboarding.ps1` (no typed commands needed).
 - `Start-Onboarding.ps1` — entry point, self-elevates, runs the steps, logs progress.
-- `Modules/DeviceJoin.psm1` — `Get-JoinStatus`, `Join-ADDomain`, `Start-EntraJoin`, `Test-JoinSupportedEdition`.
+- `Modules/DeviceJoin.psm1` — `Get-JoinStatus`, `Join-ADDomain`, `Rename-Device`, `Start-EntraJoin`, `Test-JoinSupportedEdition`.
 - `Modules/OfficeRemoval.psm1` — `Get-InstalledOffice` (scan) and `Remove-OfficeInstallation` (uninstall).
 - `Modules/BundledAppRemoval.psm1` — `Get-InstalledBundledApps` and `Remove-BundledAppInstallation` (Teams, new Outlook).
 - `Modules/McAfeeRemoval.psm1` — `Get-InstalledMcAfee`, `Remove-McAfeeInstallation`, and `Invoke-McAfeeRemovalTool` (downloads/runs MCPR).
@@ -97,9 +98,11 @@ Skip the interactive MCPR cleanup (the silent McAfee uninstalls still run):
 powershell.exe -ExecutionPolicy Bypass -File .\Start-Onboarding.ps1 -SkipMcprCleanup
 ```
 
-At startup it first asks how to join the PC:
+At startup it first asks whether to rename the PC, then how to join it:
 
 ```
+Rename this PC? Current name is DESKTOP-ABC123. Enter a new name, or press Enter to keep it
+
 How should this PC be joined?
   1) Microsoft Entra ID (Entra joined)
   2) Active Directory domain (domain joined)
@@ -136,12 +139,28 @@ failed domain join also asks whether to retry. Everything else runs
 unattended, with progress shown via a progress bar and console output, and a
 full transcript written to `Logs\`.
 
-## Device join (step 1)
+## Rename and join (step 1)
 
-Runs before anything is uninstalled. Windows **Home** can't be joined to a
-domain or Entra ID, so the script checks the edition first and reports it as
-failed on Home PCs (upgrade to Pro, then join). It also skips any join the PC
-already has.
+Runs before anything is uninstalled.
+
+**Rename:** new names must be 1–15 letters, numbers, or hyphens, not all
+numbers, and can't start or end with a hyphen; the prompt re-asks until the
+name is valid. The new name takes effect after restart, and the ticket
+summary shows it as `NEW-NAME (renamed from OLD-NAME)`.
+
+- When a domain join happens in the same run, the rename is done *inside* the
+  join (`Add-Computer -NewName`). Renaming first and then joining before a
+  restart would put the PC in the domain under its **old** name.
+- If the PC is already in a domain, renaming it also renames its account in
+  Active Directory, so the script asks for a domain account at startup.
+- If a domain join fails, the PC is still renamed on its own.
+- With an Entra join (option 1), Entra ID may list the PC under its old name
+  until it restarts.
+
+**Join:** Windows **Home** can't be joined to a domain or Entra ID, so the
+script checks the edition first and reports it as failed on Home PCs (upgrade
+to Pro, then join); a rename still works on Home. It also skips any join the
+PC already has.
 
 - **1 – Microsoft Entra ID:** Windows has no command line that signs a user
   in and Entra-joins the PC, so the script opens **Settings → Access work or
@@ -163,8 +182,8 @@ already has.
   `DomainJoined : YES`).
 
 The domain account password goes only to `Add-Computer`; it isn't written to
-the log or the ticket summary. When a join was done, the run ends with
-**RESTART REQUIRED**.
+the log or the ticket summary. When a rename or join was done, the run ends
+with **RESTART REQUIRED**.
 
 ## How detection/removal works
 

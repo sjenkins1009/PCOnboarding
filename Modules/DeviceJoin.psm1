@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
     DeviceJoin.psm1
-    Joins the PC to an Active Directory domain, Microsoft Entra ID, or both
-    (hybrid) at the start of onboarding.
+    Renames the PC and joins it to an Active Directory domain, Microsoft
+    Entra ID, or both (hybrid) at the start of onboarding.
 
     Entra join has no command-line path for a signing-in user: dsregcmd /join
     only performs *hybrid* join (it proves identity with the AD computer
@@ -40,17 +40,57 @@ function Join-ADDomain {
         [string]$DomainName,
 
         [Parameter(Mandatory)]
-        [pscredential]$Credential
+        [pscredential]$Credential,
+
+        # Renaming separately and then joining before a restart would join
+        # under the old name, so a rename rides along in the same call.
+        [string]$NewName
     )
+
+    $params = @{
+        DomainName  = $DomainName
+        Credential  = $Credential
+        Force       = $true
+        ErrorAction = 'Stop'
+    }
+    if ($NewName) { $params.NewName = $NewName }
 
     try {
         # No -Restart: the rest of onboarding runs first, and the join takes
         # effect on the next restart.
-        Add-Computer -DomainName $DomainName -Credential $Credential -Force -ErrorAction Stop
+        Add-Computer @params
         return $true
     }
     catch {
         Write-Warning "Domain join failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Rename-Device {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$NewName,
+
+        # Required when the PC is already domain joined: the rename also
+        # renames its computer account in Active Directory.
+        [pscredential]$DomainCredential
+    )
+
+    $params = @{
+        NewName     = $NewName
+        Force       = $true
+        ErrorAction = 'Stop'
+    }
+    if ($DomainCredential) { $params.DomainCredential = $DomainCredential }
+
+    try {
+        Rename-Computer @params
+        return $true
+    }
+    catch {
+        Write-Warning "Rename failed: $($_.Exception.Message)"
         return $false
     }
 }
@@ -61,4 +101,4 @@ function Start-EntraJoin {
     Start-Process 'ms-settings:workplace'
 }
 
-Export-ModuleMember -Function Get-JoinStatus, Test-JoinSupportedEdition, Join-ADDomain, Start-EntraJoin
+Export-ModuleMember -Function Get-JoinStatus, Test-JoinSupportedEdition, Join-ADDomain, Rename-Device, Start-EntraJoin
