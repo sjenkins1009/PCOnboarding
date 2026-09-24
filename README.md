@@ -14,6 +14,8 @@ PowerShell-based onboarding tool. Asks a few questions up front, then runs:
 6. Download and silently install Adobe Acrobat Reader.
 7. Optional apps — **off by default**, only installed if you say yes at the
    startup prompts: Dropbox, Slack, Google Drive, Firefox, Zoom, Cisco Secure Client.
+8. Start Windows Update. It runs a "Check for updates", and Windows downloads
+   and installs what it finds in the background after the run ends.
 
 ## Quick start on a new PC
 
@@ -55,6 +57,8 @@ Installed (2):
   - Adobe Acrobat Reader
 Failed (1):
   - Remove Microsoft OneNote - pt-br
+
+Windows Update: started at the end of the run; updates finish installing in the background.
 ```
 
 - The clock starts before the startup questions, so they count toward runtime.
@@ -64,6 +68,10 @@ Failed (1):
   aren't listed.
 - If the run stops partway because of an error, you still get a summary of
   what it finished, with a note that it stopped early.
+- Windows Update is only *started* by the run (step 8), so the time it spends
+  installing updates afterward isn't in the runtime. If a restart is also
+  needed for a rename/join, let the updates finish first so one restart covers
+  both.
 
 ## Structure
 

@@ -21,6 +21,8 @@
       7. Optional apps - prompted for interactively at startup (Dropbox,
          Slack, Google Drive, Cisco Secure Client, Firefox, Zoom). Answering "no" to all
          of them runs just the default set above.
+      8. Start Windows Update (a "Check for updates"); updates then finish
+         installing in the background after the run ends.
 
     Usage:
         powershell.exe -ExecutionPolicy Bypass -File Start-Onboarding.ps1
@@ -121,6 +123,7 @@ $summaryFailed = [System.Collections.Generic.List[string]]::new()
 $summaryJoined = [System.Collections.Generic.List[string]]::new()
 $restartNeeded = $false
 $renamed = $false
+$updatesStarted = $false
 $runCompleted = $false
 
 # --- Ask up front: default set only, or also optional apps? ---
@@ -653,6 +656,24 @@ try {
         }
     }
 
+    Write-Step 'PC Onboarding - Step 8: Start Windows Update'
+    if ($WhatIf) {
+        Write-Host '[WhatIf] Would open Windows Update and start a check for updates.' -ForegroundColor DarkYellow
+    }
+    else {
+        try {
+            # Same as clicking "Check for updates" in Settings; Windows then
+            # downloads and installs what it finds on its own, after the run ends.
+            Start-Process 'ms-settings:windowsupdate-action'
+            Write-Host 'Windows Update is checking for updates in Settings and will download and install them on its own.' -ForegroundColor Green
+            $updatesStarted = $true
+        }
+        catch {
+            Write-Host "Couldn't start Windows Update: $($_.Exception.Message)" -ForegroundColor Red
+            $summaryFailed.Add('Start Windows Update')
+        }
+    }
+
     $runCompleted = $true
 }
 finally {
@@ -697,6 +718,11 @@ finally {
         $failedItems | ForEach-Object { $lines.Add("  - $_") }
     }
 
+    if ($updatesStarted) {
+        $lines.Add('')
+        $lines.Add('Windows Update: started at the end of the run; updates finish installing in the background.')
+    }
+
     $summaryText = $lines -join [Environment]::NewLine
     $summaryPath = Join-Path $logDir "Summary_$timestamp.txt"
     Set-Content -Path $summaryPath -Value $summaryText
@@ -716,6 +742,12 @@ finally {
 
     if ($restartNeeded) {
         Write-Host "`nRESTART REQUIRED to finish renaming/joining this PC." -ForegroundColor Yellow
+        if ($updatesStarted) {
+            Write-Host 'Let Windows Update finish first, so one restart applies the updates and the rename/join together.' -ForegroundColor Yellow
+        }
+    }
+    elseif ($updatesStarted) {
+        Write-Host "`nWindows Update is still running and may ask for a restart when it's done." -ForegroundColor Yellow
     }
 
     Stop-Transcript | Out-Null
