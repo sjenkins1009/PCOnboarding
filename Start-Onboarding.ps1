@@ -2,20 +2,22 @@
     Start-Onboarding.ps1
     Entry point for the PC Onboarding application.
 
-    Steps, unattended, with on-screen progress and a transcript log:
-      1. Scan for and remove any installed Microsoft Office products
+    Startup questions, then steps with on-screen progress and a transcript log:
+      1. Join the PC - chosen at startup: Microsoft Entra ID, an Active
+         Directory domain, or both (domain join + hybrid Entra join).
+      2. Scan for and remove any installed Microsoft Office products
          (Click-to-Run, MSI, per-language ARP entries, and the OneNote
          for Windows 10 AppX package).
-      2. Remove preloaded/consumer Teams and the new Outlook app, ahead of
+      3. Remove preloaded/consumer Teams and the new Outlook app, ahead of
          the licensed Microsoft 365 deployment. OneDrive is left alone.
-      3. Remove any preloaded McAfee products (Total Protection, LiveSafe,
+      4. Remove any preloaded McAfee products (Total Protection, LiveSafe,
          WebAdvisor, Safe Connect, the Store app), then run McAfee's own
          MCPR removal tool to clear the leftovers their uninstallers strand.
          MCPR is a CAPTCHA-gated wizard and needs someone at the keyboard -
          pass -SkipMcprCleanup to keep the run fully unattended.
-      4. Download and silently install Google Chrome Enterprise.
-      5. Download and silently install Adobe Acrobat Reader.
-      6. Optional apps - prompted for interactively at startup (Dropbox,
+      5. Download and silently install Google Chrome Enterprise.
+      6. Download and silently install Adobe Acrobat Reader.
+      7. Optional apps - prompted for interactively at startup (Dropbox,
          Slack, Google Drive, Cisco Secure Client). Answering "no" to all
          of them runs just the default set above.
 
@@ -28,7 +30,7 @@ param(
     [switch]$WhatIf,
 
     # Skips only the interactive MCPR pass; the silent McAfee uninstalls
-    # in step 3 still run.
+    # in step 4 still run.
     [switch]$SkipMcprCleanup
 )
 
@@ -57,6 +59,7 @@ $startTime = Get-Date
 1..6 | ForEach-Object { Write-Host '' }
 
 Start-Transcript -Path $transcriptPath | Out-Null
+Import-Module (Join-Path $scriptRoot 'Modules\DeviceJoin.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\OfficeRemoval.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\BundledAppRemoval.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\McAfeeRemoval.psm1') -Force
@@ -72,6 +75,13 @@ function Read-YesNo {
     param([string]$Prompt)
     $answer = Read-Host "$Prompt (y/N)"
     return $answer -match '^[Yy]'
+}
+
+function Read-DomainName {
+    # Re-asks until something is entered - an empty name would fail parameter
+    # binding in Join-ADDomain and abort the whole run.
+    do { $name = (Read-Host '  Domain name (e.g. contoso.local)').Trim() } while (-not $name)
+    return $name
 }
 
 function Format-Minutes {
@@ -95,12 +105,31 @@ function Get-SummaryName {
 $summaryRemoved = [System.Collections.Generic.List[string]]::new()
 $summaryInstalled = [System.Collections.Generic.List[string]]::new()
 $summaryFailed = [System.Collections.Generic.List[string]]::new()
+$summaryJoined = [System.Collections.Generic.List[string]]::new()
+$restartNeeded = $false
 $runCompleted = $false
 
 # --- Ask up front: default set only, or also optional apps? ---
 Write-Step 'PC Onboarding Setup'
 Write-Host 'Always runs: remove Office, remove preloaded Teams/new Outlook, remove McAfee, install Google Chrome Enterprise, install Adobe Acrobat Reader.'
 
+Write-Host ''
+Write-Host 'How should this PC be joined?'
+Write-Host '  1) Microsoft Entra ID (Entra joined)'
+Write-Host '  2) Active Directory domain (domain joined)'
+Write-Host '  3) Both - domain join, then hybrid Entra join'
+do {
+    $joinChoice = (Read-Host 'Enter 1, 2, or 3 (or just press Enter to skip joining)').Trim()
+} while ($joinChoice -and $joinChoice -notin '1', '2', '3')
+
+$domainName = $null
+$domainCredential = $null
+if ($joinChoice -in '2', '3') {
+    $domainName = Read-DomainName
+    $domainCredential = Get-Credential -Message "Account allowed to join computers to $domainName (e.g. CONTOSO\admin)"
+}
+
+Write-Host ''
 $installDropbox = $false
 $installSlack = $false
 $installGoogleDrive = $false
@@ -127,7 +156,114 @@ if (Read-YesNo 'Also install any optional apps (Dropbox, Slack, Google Drive, Ci
 }
 
 try {
-    Write-Step 'PC Onboarding - Step 1: Remove Microsoft Office'
+    Write-Step 'PC Onboarding - Step 1: Join Device'
+
+    if (-not $joinChoice) {
+        Write-Host 'No join selected. Skipping.' -ForegroundColor Green
+    }
+    elseif (-not (Test-JoinSupportedEdition)) {
+        Write-Host 'This PC is running Windows Home, which cannot join a domain or Microsoft Entra ID.' -ForegroundColor Red
+        Write-Host 'Upgrade it to Windows Pro, then join it manually.' -ForegroundColor Red
+        $summaryFailed.Add('Join device (Windows Home edition cannot be joined; upgrade to Pro)')
+    }
+    else {
+        $joinStatus = Get-JoinStatus
+
+        # --- Domain join: options 2 and 3 ---
+        $domainReady = $false
+        if ($joinChoice -in '2', '3') {
+            if ($joinStatus.DomainJoined) {
+                Write-Host "Already joined to domain $($joinStatus.Domain). Skipping domain join." -ForegroundColor Green
+                $domainReady = $true
+            }
+            elseif ($WhatIf) {
+                Write-Host "[WhatIf] Would join domain $domainName." -ForegroundColor DarkYellow
+            }
+            else {
+                # Retry loop: a typo in the domain name or password, or the PC not
+                # yet being on the client's network/VPN, is the usual failure.
+                while ($true) {
+                    Write-Host "Joining domain $domainName..." -NoNewline
+                    if ($domainCredential -and (Join-ADDomain -DomainName $domainName -Credential $domainCredential)) {
+                        Write-Host ' Done (takes effect after restart).' -ForegroundColor Green
+                        $domainReady = $true
+                        break
+                    }
+                    Write-Host ' FAILED.' -ForegroundColor Red
+                    if (-not (Read-YesNo 'Try again (you can re-enter the domain name and account)?')) { break }
+                    $domainName = Read-DomainName
+                    $domainCredential = Get-Credential -Message "Account allowed to join computers to $domainName (e.g. CONTOSO\admin)"
+                }
+
+                if ($domainReady) {
+                    $summaryJoined.Add("Domain: $domainName")
+                    $restartNeeded = $true
+                }
+                else {
+                    $summaryFailed.Add("Join domain $domainName")
+                }
+            }
+        }
+
+        # --- Hybrid Entra join: option 3 ---
+        # Can't be done directly from here: after the domain join takes effect,
+        # Windows registers the device itself - but only if the client's
+        # Microsoft Entra Connect is set up for hybrid join.
+        if ($joinChoice -eq '3' -and $domainReady) {
+            if ($joinStatus.EntraJoined) {
+                Write-Host "Already joined to Microsoft Entra ID ($($joinStatus.TenantName)). Skipping." -ForegroundColor Green
+            }
+            else {
+                Write-Host 'Hybrid Entra join completes automatically after restart, if the client''s Microsoft Entra Connect' -ForegroundColor Yellow
+                Write-Host 'is set up for hybrid join. Confirm later with: dsregcmd /status  (AzureAdJoined : YES)' -ForegroundColor Yellow
+                $summaryJoined.Add('Microsoft Entra ID (hybrid): completes after restart')
+            }
+        }
+
+        # --- Entra join: option 1 ---
+        if ($joinChoice -eq '1') {
+            if ($joinStatus.EntraJoined) {
+                Write-Host "Already joined to Microsoft Entra ID ($($joinStatus.TenantName)). Skipping." -ForegroundColor Green
+            }
+            elseif ($joinStatus.DomainJoined) {
+                Write-Host "This PC is joined to domain $($joinStatus.Domain), so it can't be Entra joined directly." -ForegroundColor Red
+                Write-Host 'Re-run and choose option 3 (hybrid) instead.' -ForegroundColor Red
+                $summaryFailed.Add('Join Microsoft Entra ID (PC is domain joined; needs hybrid join)')
+            }
+            elseif ($WhatIf) {
+                Write-Host '[WhatIf] Would open the Microsoft Entra join screen.' -ForegroundColor DarkYellow
+            }
+            else {
+                do {
+                    Start-EntraJoin
+                    Write-Host 'Settings > Access work or school is opening. In that window:' -ForegroundColor Yellow
+                    Write-Host '  1. Click Connect.'
+                    Write-Host '  2. Click "Join this device to Microsoft Entra ID" (link at the bottom).'
+                    Write-Host '  3. Sign in with the user''s work account and confirm the organization.'
+                    Write-Host '  4. Click Done. Do NOT restart yet - this script will say when.'
+                    $null = Read-Host 'Press Enter here once the join is finished'
+
+                    $joinStatus = Get-JoinStatus
+                    if ($joinStatus.EntraJoined) {
+                        Write-Host "Joined to Microsoft Entra ID ($($joinStatus.TenantName))." -ForegroundColor Green
+                        break
+                    }
+                    Write-Host 'This PC does not show as Entra joined yet.' -ForegroundColor Red
+                } while (Read-YesNo 'Open the join screen and try again?')
+
+                if ($joinStatus.EntraJoined) {
+                    $tenantLabel = if ($joinStatus.TenantName) { "Microsoft Entra ID: $($joinStatus.TenantName)" } else { 'Microsoft Entra ID' }
+                    $summaryJoined.Add($tenantLabel)
+                    $restartNeeded = $true
+                }
+                else {
+                    $summaryFailed.Add('Join Microsoft Entra ID')
+                }
+            }
+        }
+    }
+
+    Write-Step 'PC Onboarding - Step 2: Remove Microsoft Office'
 
     Write-Host 'Scanning installed applications for Office products...'
     $officeProducts = Get-InstalledOffice
@@ -192,7 +328,7 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 2: Remove Teams and new Outlook'
+    Write-Step 'PC Onboarding - Step 3: Remove Teams and new Outlook'
 
     Write-Host 'Scanning for Teams and new Outlook installs...'
     $bundledApps = Get-InstalledBundledApps
@@ -246,7 +382,7 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 3: Remove McAfee'
+    Write-Step 'PC Onboarding - Step 4: Remove McAfee'
 
     Write-Host 'Scanning for McAfee products...'
     $mcafeeProducts = Get-InstalledMcAfee
@@ -338,7 +474,7 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 4: Install Google Chrome Enterprise'
+    Write-Step 'PC Onboarding - Step 5: Install Google Chrome Enterprise'
     if ($WhatIf) {
         Write-Host '[WhatIf] Would download and install Google Chrome Enterprise.' -ForegroundColor DarkYellow
     }
@@ -356,7 +492,7 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 5: Install Adobe Acrobat Reader'
+    Write-Step 'PC Onboarding - Step 6: Install Adobe Acrobat Reader'
     if ($WhatIf) {
         Write-Host '[WhatIf] Would download and install Adobe Acrobat Reader.' -ForegroundColor DarkYellow
     }
@@ -373,7 +509,7 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 6: Optional Applications'
+    Write-Step 'PC Onboarding - Step 7: Optional Applications'
 
     if (-not $installDropbox -and -not $installSlack -and -not $installGoogleDrive -and -not $installCisco) {
         Write-Host 'None selected. Skipping.' -ForegroundColor Green
@@ -450,6 +586,11 @@ finally {
     $installed = @($summaryInstalled | Select-Object -Unique)
     $failedItems = @($summaryFailed | Select-Object -Unique)
 
+    if ($summaryJoined.Count -gt 0) {
+        $lines.Add('')
+        $lines.Add('Joined:')
+        $summaryJoined | ForEach-Object { $lines.Add("  - $_") }
+    }
     if ($removed.Count -gt 0) {
         $lines.Add('')
         $lines.Add("Removed ($($removed.Count)):")
@@ -482,6 +623,10 @@ finally {
         Write-Host "Couldn't copy to the clipboard; the summary is saved at $summaryPath." -ForegroundColor Yellow
     }
     Write-Host "Summary saved to: $summaryPath"
+
+    if ($restartNeeded) {
+        Write-Host "`nRESTART REQUIRED to finish joining this PC." -ForegroundColor Yellow
+    }
 
     Stop-Transcript | Out-Null
     Write-Host "`nLog saved to: $transcriptPath"

@@ -1,16 +1,17 @@
 # PC Onboarding Application
 
-PowerShell-based onboarding tool. Asks a few yes/no questions up front, then
-runs unattended:
+PowerShell-based onboarding tool. Asks a few questions up front, then runs:
 
-1. Detect and remove all Microsoft Office installations.
-2. Detect and remove preloaded/consumer Teams and the new Outlook app.
+1. Join the PC to Microsoft Entra ID, an Active Directory domain, or both
+   (chosen at startup — see [Device join](#device-join-step-1)).
+2. Detect and remove all Microsoft Office installations.
+3. Detect and remove preloaded/consumer Teams and the new Outlook app.
    OneDrive is intentionally left in place.
-3. Detect and remove preloaded McAfee products, then run McAfee's own MCPR
+4. Detect and remove preloaded McAfee products, then run McAfee's own MCPR
    removal tool to clear what their uninstallers leave behind.
-4. Download and silently install Google Chrome Enterprise.
-5. Download and silently install Adobe Acrobat Reader.
-6. Optional apps — **off by default**, only installed if you say yes at the
+5. Download and silently install Google Chrome Enterprise.
+6. Download and silently install Adobe Acrobat Reader.
+7. Optional apps — **off by default**, only installed if you say yes at the
    startup prompts: Dropbox, Slack, Google Drive, Cisco Secure Client.
 
 ## Quick start on a new PC
@@ -41,6 +42,9 @@ Start Time: 9/24/2026 2:05 PM
 End Time:   9/24/2026 2:41 PM
 Runtime:    45 min (actual 36 min, rounded up to 15-min increments)
 
+Joined:
+  - Domain: contoso.local
+  - Microsoft Entra ID (hybrid): completes after restart
 Removed (5):
   - Microsoft 365 - en-us
   - Microsoft Teams (new)
@@ -64,6 +68,7 @@ Failed (1):
 
 - `Run-Onboarding.cmd` — double-click launcher for `Start-Onboarding.ps1` (no typed commands needed).
 - `Start-Onboarding.ps1` — entry point, self-elevates, runs the steps, logs progress.
+- `Modules/DeviceJoin.psm1` — `Get-JoinStatus`, `Join-ADDomain`, `Start-EntraJoin`, `Test-JoinSupportedEdition`.
 - `Modules/OfficeRemoval.psm1` — `Get-InstalledOffice` (scan) and `Remove-OfficeInstallation` (uninstall).
 - `Modules/BundledAppRemoval.psm1` — `Get-InstalledBundledApps` and `Remove-BundledAppInstallation` (Teams, new Outlook).
 - `Modules/McAfeeRemoval.psm1` — `Get-InstalledMcAfee`, `Remove-McAfeeInstallation`, and `Invoke-McAfeeRemovalTool` (downloads/runs MCPR).
@@ -86,14 +91,24 @@ Dry run (detect only, no removal):
 powershell.exe -ExecutionPolicy Bypass -File .\Start-Onboarding.ps1 -WhatIf
 ```
 
-Fully unattended (skips the one interactive step — MCPR; the silent McAfee
-uninstalls still run):
+Skip the interactive MCPR cleanup (the silent McAfee uninstalls still run):
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\Start-Onboarding.ps1 -SkipMcprCleanup
 ```
 
-At startup it asks:
+At startup it first asks how to join the PC:
+
+```
+How should this PC be joined?
+  1) Microsoft Entra ID (Entra joined)
+  2) Active Directory domain (domain joined)
+  3) Both - domain join, then hybrid Entra join
+Enter 1, 2, or 3 (or just press Enter to skip joining)
+```
+
+Options 2 and 3 then ask for the domain name and pop up a sign-in box for an
+account that's allowed to join computers to it. Then it asks:
 
 ```
 Also install any optional apps (Dropbox, Slack, Google Drive, Cisco Secure Client)? (y/N)
@@ -113,12 +128,43 @@ it asks about each app in turn:
 The Cisco path prompt only appears if you said yes to Cisco Secure Client,
 and re-asks until you give it a file that actually exists.
 
-Aside from that startup Q&A, the only step that can prompt is the MCPR
-cleanup in step 3, and only if McAfee was actually found — MCPR is a
-CAPTCHA-gated wizard, so it needs someone at the keyboard (pass
-`-SkipMcprCleanup` to skip it). Everything else runs unattended, with
-progress shown via a progress bar and console output, and a full transcript
-written to `Logs\`.
+Aside from that startup Q&A, only two things can need someone at the
+keyboard: an **Entra join** (option 1), which happens in step 1 right after
+the questions, and the **MCPR cleanup** in step 4, only if McAfee was actually
+found (MCPR is a CAPTCHA-gated wizard; pass `-SkipMcprCleanup` to skip it). A
+failed domain join also asks whether to retry. Everything else runs
+unattended, with progress shown via a progress bar and console output, and a
+full transcript written to `Logs\`.
+
+## Device join (step 1)
+
+Runs before anything is uninstalled. Windows **Home** can't be joined to a
+domain or Entra ID, so the script checks the edition first and reports it as
+failed on Home PCs (upgrade to Pro, then join). It also skips any join the PC
+already has.
+
+- **1 – Microsoft Entra ID:** Windows has no command line that signs a user
+  in and Entra-joins the PC, so the script opens **Settings → Access work or
+  school** and prints the clicks: Connect → "Join this device to Microsoft
+  Entra ID" → sign in with the user's work account → Done. Press Enter in the
+  script when finished; it checks `dsregcmd /status` to confirm the join and
+  offers to reopen the screen if it didn't work. Don't restart when Windows
+  offers — the script finishes first and tells you when.
+- **2 – Active Directory domain:** fully command line (`Add-Computer`). The PC
+  must be able to reach a domain controller, so it has to be on the client's
+  network or VPN. If the join fails (wrong password, typo, can't reach the
+  domain), it offers to retry with a corrected domain name or account. The
+  join takes effect after restart, so the rest of onboarding runs first.
+- **3 – Both:** Windows won't Entra-join a PC that's in a domain directly; the
+  "both" state is **hybrid join**. The script does the domain join, and after
+  the restart Windows registers the PC with Entra ID by itself — **only if the
+  client's Microsoft Entra Connect is set up for hybrid join**. Check afterward
+  with `dsregcmd /status` (look for `AzureAdJoined : YES` and
+  `DomainJoined : YES`).
+
+The domain account password goes only to `Add-Computer`; it isn't written to
+the log or the ticket summary. When a join was done, the run ends with
+**RESTART REQUIRED**.
 
 ## How detection/removal works
 
@@ -155,10 +201,10 @@ written to `Logs\`.
 A post-removal re-scan confirms nothing Office-related remains (some leftovers
 may require a reboot to fully clear, which is called out if seen).
 
-## Teams / new Outlook removal (step 2)
+## Teams / new Outlook removal (step 3)
 
 These come preloaded on new machines and get replaced once the licensed
-Microsoft 365 deployment runs, so step 2 clears them out first. OneDrive is
+Microsoft 365 deployment runs, so step 3 clears them out first. OneDrive is
 deliberately not touched by this step.
 
 - **Teams (classic)**: detected two ways — the `Teams Machine-Wide Installer`
@@ -178,7 +224,7 @@ Teams for every new login, and the AppX *provisioned* package is exactly
 what installs the new AppX-based Teams/Outlook for every new login. Removing
 them removes that trigger, so future profiles won't get it either.
 
-## McAfee removal (step 3)
+## McAfee removal (step 4)
 
 McAfee ships preloaded on most consumer/OEM machines as a trial, usually as
 several separate entries rather than one. Removal is two stages, because in
@@ -237,7 +283,7 @@ Authenticode signature before running it, and refuses to execute unless the
 signature is valid *and* the signing subject is McAfee. If the URL ever
 starts serving something else, the script fails there instead of running it.
 
-## App installs (steps 4 & 5)
+## App installs (steps 5 & 6)
 
 Both apps are downloaded to `%ProgramData%\PCOnboarding\Downloads` and
 installed silently — no prompts, no bundled-offer opt-outs to click through.
@@ -256,7 +302,7 @@ Both installer functions download with `Invoke-WebRequest`, verify a non-empty
 file landed before proceeding, and treat MSI exit codes 0 and 3010 (success,
 reboot required) as success.
 
-## Optional apps (step 6) — off by default
+## Optional apps (step 7) — off by default
 
 None of these run unless you answer yes to them at the startup prompts (see
 Usage above). All three downloadable ones land in
@@ -284,12 +330,12 @@ Usage above). All three downloadable ones land in
 
 ## Notes / next steps
 
-- Office removal (step 1) only targets Office suites/apps (Word, Excel,
+- Office removal (step 2) only targets Office suites/apps (Word, Excel,
   Outlook, Visio, Project, Microsoft 365 Apps, OneNote in all its forms). It
   deliberately excludes Edge, Visual Studio, .NET, etc. — and Teams/the new
-  Outlook, which step 2 handles separately since they're not part of the
+  Outlook, which step 3 handles separately since they're not part of the
   Office suite and use different removal mechanisms.
-- OneDrive is intentionally left alone by this script (both steps 1 and 2
+- OneDrive is intentionally left alone by this script (both steps 2 and 3
   exclude it) — it's not being removed as part of this onboarding flow.
 - If Google or Adobe change these download URLs in the future, only
   `Modules/AppInstalls.psm1` needs updating — nothing else references them.
