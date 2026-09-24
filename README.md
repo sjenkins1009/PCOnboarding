@@ -14,8 +14,9 @@ PowerShell-based onboarding tool. Asks a few questions up front, then runs:
 6. Download and silently install Adobe Acrobat Reader.
 7. Optional apps — **off by default**, only installed if you say yes at the
    startup prompts: Dropbox, Slack, Google Drive, Firefox, Zoom, Cisco Secure Client.
-8. Start Windows Update. It runs a "Check for updates", and Windows downloads
-   and installs what it finds in the background after the run ends.
+8. Windows Update — chosen at startup: install updates as part of the run
+   (time counted, updates listed in the summary), or start them in the
+   background and finish right away (see [Windows Update](#windows-update-step-8)).
 
 ## Quick start on a new PC
 
@@ -55,11 +56,16 @@ Removed (5):
 Installed (2):
   - Google Chrome Enterprise
   - Adobe Acrobat Reader
+Windows Updates installed (2):
+  - 2026-09 Cumulative Update for Windows 11 Version 25H2 for x64-based Systems (KB5066001)
+  - Security Intelligence Update for Microsoft Defender Antivirus (KB2267602)
 Failed (1):
   - Remove Microsoft OneNote - pt-br
-
-Windows Update: started at the end of the run; updates finish installing in the background.
 ```
+
+If you chose to run Windows Update in the background instead, the updates
+section is replaced by: `Windows Update: started at the end of the run;
+updates finish installing in the background.`
 
 - The clock starts before the startup questions, so they count toward runtime.
 - Runtime is rounded **up** to the next 15 minutes (a 16-minute run bills as
@@ -68,10 +74,9 @@ Windows Update: started at the end of the run; updates finish installing in the 
   aren't listed.
 - If the run stops partway because of an error, you still get a summary of
   what it finished, with a note that it stopped early.
-- Windows Update is only *started* by the run (step 8), so the time it spends
-  installing updates afterward isn't in the runtime. If a restart is also
-  needed for a rename/join, let the updates finish first so one restart covers
-  both.
+- Windows Update time is only in the runtime if you chose to install updates
+  as part of the run. In background mode, if a restart is also needed for a
+  rename/join, let the updates finish first so one restart covers both.
 
 ## Structure
 
@@ -83,6 +88,7 @@ Windows Update: started at the end of the run; updates finish installing in the 
 - `Modules/McAfeeRemoval.psm1` — `Get-InstalledMcAfee`, `Remove-McAfeeInstallation`, and `Invoke-McAfeeRemovalTool` (downloads/runs MCPR).
 - `Modules/AppInstalls.psm1` — `Install-ChromeEnterprise` and `Install-AdobeReader`.
 - `Modules/OptionalAppInstalls.psm1` — `Install-Dropbox`, `Install-Slack`, `Install-GoogleDrive`, `Install-Firefox`, `Install-Zoom`, `Install-CiscoSecureClient`.
+- `Modules/WindowsUpdates.psm1` — `Get-PendingWindowsUpdate`, `Install-WindowsUpdateItem`, `Start-WindowsUpdateScan`.
 - `Logs/` — transcript + per-product/app logs, one run per timestamp.
 
 ## Usage
@@ -140,6 +146,18 @@ it asks about each app in turn:
 
 The Cisco path prompt only appears if you said yes to Cisco Secure Client,
 and re-asks until you give it a file that actually exists.
+
+Last, it asks how to handle Windows Update:
+
+```
+Windows Update at the end of the run:
+  1) Install updates as part of the run - update time counts toward runtime, updates listed in the summary
+  2) Start updates in the background - summary is ready right away, updates finish afterward
+Enter 1 or 2 (or just press Enter for 2)
+```
+
+This is asked at startup (not when the run reaches step 8) so the run never
+sits waiting on a prompt, with the clock running, after you've walked away.
 
 Aside from that startup Q&A, only two things can need someone at the
 keyboard: an **Entra join** (option 1), which happens in step 1 right after
@@ -364,6 +382,27 @@ Usage above). All the downloadable ones land in
   the MSI (re-asking until the file actually exists) and runs
   `msiexec /i ... /qn /norestart` against it, same as the other MSI-based
   installs in this project.
+
+## Windows Update (step 8)
+
+Which mode runs is chosen at startup.
+
+- **1 – Install as part of the run:** uses the Windows Update service built
+  into Windows (no add-on modules). It checks for updates, then downloads and
+  installs them one at a time with a progress bar. The time counts toward the
+  runtime, each installed update is listed in the ticket summary, and any that
+  fail go under **Failed**.
+  - It installs what Windows would install automatically: security and
+    cumulative updates, Defender updates, and drivers. Optional/preview
+    updates are skipped, and so are **feature upgrades** (e.g. 24H2 → 25H2),
+    which can take over an hour.
+  - It runs one pass. Some updates only show up after the restart that the
+    first batch needs, so a later check may find a few more.
+  - If an update needs a restart, the run ends with **RESTART REQUIRED**.
+- **2 – Background (default):** opens Settings → Windows Update and triggers
+  **Check for updates**. Windows downloads and installs on its own after the
+  run ends, so none of that time is in the runtime, and the summary just notes
+  that updates were started.
 
 ## Notes / next steps
 

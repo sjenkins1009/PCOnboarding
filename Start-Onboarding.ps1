@@ -21,8 +21,9 @@
       7. Optional apps - prompted for interactively at startup (Dropbox,
          Slack, Google Drive, Cisco Secure Client, Firefox, Zoom). Answering "no" to all
          of them runs just the default set above.
-      8. Start Windows Update (a "Check for updates"); updates then finish
-         installing in the background after the run ends.
+      8. Windows Update - chosen at startup: install updates as part of the
+         run (time counted, updates listed in the summary), or start a
+         "Check for updates" and let them finish in the background.
 
     Usage:
         powershell.exe -ExecutionPolicy Bypass -File Start-Onboarding.ps1
@@ -68,6 +69,7 @@ Import-Module (Join-Path $scriptRoot 'Modules\BundledAppRemoval.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\McAfeeRemoval.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\AppInstalls.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\OptionalAppInstalls.psm1') -Force
+Import-Module (Join-Path $scriptRoot 'Modules\WindowsUpdates.psm1') -Force
 
 function Write-Step {
     param([string]$Message, [string]$Color = 'Cyan')
@@ -124,6 +126,8 @@ $summaryJoined = [System.Collections.Generic.List[string]]::new()
 $restartNeeded = $false
 $renamed = $false
 $updatesStarted = $false
+$summaryUpdates = [System.Collections.Generic.List[string]]::new()
+$updatesChecked = $false
 $runCompleted = $false
 
 # --- Ask up front: default set only, or also optional apps? ---
@@ -186,6 +190,17 @@ if (Read-YesNo 'Also install any optional apps (Dropbox, Slack, Google Drive, Ci
         } while (-not (Test-Path $ciscoInstallerPath))
     }
 }
+
+# Asked here with the other questions rather than at step 8, so the run never
+# sits waiting on a prompt (with the clock running) after the tech walks away.
+Write-Host ''
+Write-Host 'Windows Update at the end of the run:'
+Write-Host '  1) Install updates as part of the run - update time counts toward runtime, updates listed in the summary'
+Write-Host '  2) Start updates in the background - summary is ready right away, updates finish afterward'
+do {
+    $updateChoice = (Read-Host 'Enter 1 or 2 (or just press Enter for 2)').Trim()
+} while ($updateChoice -and $updateChoice -notin '1', '2')
+$installUpdatesInRun = $updateChoice -eq '1'
 
 try {
     Write-Step 'PC Onboarding - Step 1: Rename and Join Device'
@@ -656,21 +671,68 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 8: Start Windows Update'
-    if ($WhatIf) {
-        Write-Host '[WhatIf] Would open Windows Update and start a check for updates.' -ForegroundColor DarkYellow
+    Write-Step 'PC Onboarding - Step 8: Windows Update'
+    if ($installUpdatesInRun) {
+        if ($WhatIf) {
+            Write-Host '[WhatIf] Would check for and install Windows updates as part of the run.' -ForegroundColor DarkYellow
+        }
+        else {
+            Write-Host 'Checking for Windows updates (this can take a few minutes)...'
+            $pendingUpdates = @()
+            try {
+                $pendingUpdates = Get-PendingWindowsUpdate
+                $updatesChecked = $true
+            }
+            catch {
+                Write-Host "Couldn't check for updates: $($_.Exception.Message)" -ForegroundColor Red
+                $summaryFailed.Add('Check for Windows updates')
+            }
+
+            if ($updatesChecked -and $pendingUpdates.Count -eq 0) {
+                Write-Host 'Windows is already up to date.' -ForegroundColor Green
+            }
+            elseif ($pendingUpdates.Count -gt 0) {
+                Write-Host "Found $($pendingUpdates.Count) update(s):"
+                $pendingUpdates | ForEach-Object { Write-Host "  - $($_.Title)" }
+
+                $updateTotal = $pendingUpdates.Count
+                $updateIndex = 0
+                foreach ($update in $pendingUpdates) {
+                    $updateIndex++
+                    Write-Progress -Activity 'Installing Windows updates' `
+                        -Status "($updateIndex of $updateTotal) $($update.Title)" `
+                        -PercentComplete ([int](($updateIndex - 1) / $updateTotal * 100))
+
+                    Write-Host "Installing ($updateIndex of $updateTotal) $($update.Title)..." -NoNewline
+                    $updateResult = Install-WindowsUpdateItem -Update $update
+                    if ($updateResult.Succeeded) {
+                        Write-Host ' Done.' -ForegroundColor Green
+                        $summaryUpdates.Add($update.Title)
+                    }
+                    else {
+                        Write-Host ' FAILED.' -ForegroundColor Red
+                        $summaryFailed.Add("Install update: $($update.Title)")
+                    }
+                    if ($updateResult.RebootRequired) { $restartNeeded = $true }
+                }
+                Write-Progress -Activity 'Installing Windows updates' -Completed
+            }
+        }
     }
     else {
-        try {
-            # Same as clicking "Check for updates" in Settings; Windows then
-            # downloads and installs what it finds on its own, after the run ends.
-            Start-Process 'ms-settings:windowsupdate-action'
-            Write-Host 'Windows Update is checking for updates in Settings and will download and install them on its own.' -ForegroundColor Green
-            $updatesStarted = $true
+        if ($WhatIf) {
+            Write-Host '[WhatIf] Would open Windows Update and start a check for updates.' -ForegroundColor DarkYellow
         }
-        catch {
-            Write-Host "Couldn't start Windows Update: $($_.Exception.Message)" -ForegroundColor Red
-            $summaryFailed.Add('Start Windows Update')
+        else {
+            try {
+                Start-WindowsUpdateScan
+                Write-Host 'Windows Update is checking for updates in Settings and will download and install them on its own.' -ForegroundColor Green
+                $updatesStarted = $true
+            }
+            catch {
+                Write-Host "Couldn't start Windows Update: $($_.Exception.Message)" -ForegroundColor Red
+                $summaryFailed.Add('Start Windows Update')
+            }
         }
     }
 
@@ -712,6 +774,11 @@ finally {
         $lines.Add("Installed ($($installed.Count)):")
         $installed | ForEach-Object { $lines.Add("  - $_") }
     }
+    if ($summaryUpdates.Count -gt 0) {
+        $lines.Add('')
+        $lines.Add("Windows Updates installed ($($summaryUpdates.Count)):")
+        $summaryUpdates | ForEach-Object { $lines.Add("  - $_") }
+    }
     if ($failedItems.Count -gt 0) {
         $lines.Add('')
         $lines.Add("Failed ($($failedItems.Count)):")
@@ -721,6 +788,10 @@ finally {
     if ($updatesStarted) {
         $lines.Add('')
         $lines.Add('Windows Update: started at the end of the run; updates finish installing in the background.')
+    }
+    elseif ($updatesChecked -and @($pendingUpdates).Count -eq 0) {
+        $lines.Add('')
+        $lines.Add('Windows Update: already up to date.')
     }
 
     $summaryText = $lines -join [Environment]::NewLine
@@ -741,7 +812,7 @@ finally {
     Write-Host "Summary saved to: $summaryPath"
 
     if ($restartNeeded) {
-        Write-Host "`nRESTART REQUIRED to finish renaming/joining this PC." -ForegroundColor Yellow
+        Write-Host "`nRESTART REQUIRED to finish setting up this PC (updates, rename, or join)." -ForegroundColor Yellow
         if ($updatesStarted) {
             Write-Host 'Let Windows Update finish first, so one restart applies the updates and the rename/join together.' -ForegroundColor Yellow
         }
