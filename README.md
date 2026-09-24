@@ -15,15 +15,19 @@ runs unattended:
 
 ## Quick start on a new PC
 
-1. In a browser, sign in to GitHub (the repo is private) and go to
-   **https://github.com/sjenkins1009/PCOnboarding/releases/latest**.
-2. Download **PCOnboarding.zip** and extract it (right-click → Extract All).
-3. Open the extracted `PCOnboarding` folder and double-click
-   **`Run-Onboarding.cmd`**. Approve the admin (UAC) prompt.
+In PowerShell:
 
-Windows may show a "Do you want to run this file?" warning for a downloaded
-file. Click **Run**. The window stays open after the run so you can read the
-summary.
+```powershell
+iwr https://git-pc.skjenkins.com/PCOnboarding.zip -OutFile $env:TEMP\PCOnboarding.zip
+Expand-Archive $env:TEMP\PCOnboarding.zip -DestinationPath C:\PCOnboarding -Force
+C:\PCOnboarding\Run-Onboarding.cmd
+```
+
+Approve the admin (UAC) prompt if one appears. The window stays open after the
+run so you can read the summary.
+
+`PCOnboarding.zip` is rebuilt automatically from `main` on every push (see
+`.github/workflows/pages.yml`), so the link always has the latest version.
 
 ## Structure
 

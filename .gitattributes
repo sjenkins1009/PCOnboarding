@@ -1,2 +1,8 @@
 # Batch files need Windows line endings to run reliably.
 *.cmd text eol=crlf
+
+# Repo plumbing stays out of the downloadable PCOnboarding.zip.
+.github export-ignore
+CNAME export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
