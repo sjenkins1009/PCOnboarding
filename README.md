@@ -29,6 +29,37 @@ run so you can read the summary.
 `PCOnboarding.zip` is rebuilt automatically from `main` on every push (see
 `.github/workflows/pages.yml`), so the link always has the latest version.
 
+## Ticket summary
+
+When the run finishes, the script prints a summary ready to paste into a
+ticket, **copies it to the clipboard**, and saves it as
+`Logs\Summary_<timestamp>.txt`:
+
+```
+PC Onboarding Summary - DESKTOP-ABC123
+Start Time: 9/24/2026 2:05 PM
+End Time:   9/24/2026 2:41 PM
+Runtime:    45 min (actual 36 min, rounded up to 15-min increments)
+
+Removed (5):
+  - Microsoft 365 - en-us
+  - Microsoft Teams (new)
+  - ...
+Installed (2):
+  - Google Chrome Enterprise
+  - Adobe Acrobat Reader
+Failed (1):
+  - Remove Microsoft OneNote - pt-br
+```
+
+- The clock starts before the startup questions, so they count toward runtime.
+- Runtime is rounded **up** to the next 15 minutes (a 16-minute run bills as
+  30). The actual minutes are shown alongside it.
+- Sections with nothing in them are left out, and apps you didn't choose
+  aren't listed.
+- If the run stops partway because of an error, you still get a summary of
+  what it finished, with a note that it stopped early.
+
 ## Structure
 
 - `Run-Onboarding.cmd` — double-click launcher for `Start-Onboarding.ps1` (no typed commands needed).

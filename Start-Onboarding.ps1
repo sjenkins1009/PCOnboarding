@@ -50,6 +50,9 @@ if (-not $isAdmin) {
     exit
 }
 
+# Clock starts before the startup questions so they count toward runtime.
+$startTime = Get-Date
+
 # Padding so the blue Write-Progress bar doesn't cover the first lines of output.
 1..6 | ForEach-Object { Write-Host '' }
 
@@ -70,6 +73,29 @@ function Read-YesNo {
     $answer = Read-Host "$Prompt (y/N)"
     return $answer -match '^[Yy]'
 }
+
+function Format-Minutes {
+    param([int]$Minutes)
+    if ($Minutes -lt 60) { return "$Minutes min" }
+    $hours = [math]::Floor($Minutes / 60)
+    $rest = $Minutes % 60
+    if ($rest -eq 0) { return "$hours hr" }
+    return "$hours hr $rest min"
+}
+
+function Get-SummaryName {
+    # AppX entries carry the raw package name, e.g. "Microsoft Teams (new)
+    # (MSTeams_25.1_x64__8wekyb3d8bbwe)". Package names always contain an
+    # underscore, so strip that trailing parenthetical for a client-readable name.
+    param([string]$Name)
+    return $Name -replace ' \((provisioned, )?[^()]*_[^()]*\)$', ''
+}
+
+# Collected across every step for the end-of-run ticket summary.
+$summaryRemoved = [System.Collections.Generic.List[string]]::new()
+$summaryInstalled = [System.Collections.Generic.List[string]]::new()
+$summaryFailed = [System.Collections.Generic.List[string]]::new()
+$runCompleted = $false
 
 # --- Ask up front: default set only, or also optional apps? ---
 Write-Step 'PC Onboarding Setup'
@@ -135,10 +161,12 @@ try {
 
             if ($success) {
                 Write-Host ' Done.' -ForegroundColor Green
+                $summaryRemoved.Add((Get-SummaryName $product.Name))
             }
             else {
                 Write-Host ' FAILED.' -ForegroundColor Red
                 $failed.Add($product.Name)
+                $summaryFailed.Add("Remove $(Get-SummaryName $product.Name)")
             }
         }
 
@@ -198,10 +226,12 @@ try {
 
             if ($success) {
                 Write-Host ' Done.' -ForegroundColor Green
+                $summaryRemoved.Add((Get-SummaryName $app.Name))
             }
             else {
                 Write-Host ' FAILED.' -ForegroundColor Red
                 $bundledFailed.Add($app.Name)
+                $summaryFailed.Add("Remove $(Get-SummaryName $app.Name)")
             }
         }
 
@@ -250,10 +280,12 @@ try {
 
             if ($success) {
                 Write-Host ' Done.' -ForegroundColor Green
+                $summaryRemoved.Add((Get-SummaryName $product.Name))
             }
             else {
                 Write-Host ' FAILED.' -ForegroundColor Red
                 $mcafeeFailed.Add($product.Name)
+                $summaryFailed.Add("Remove $(Get-SummaryName $product.Name)")
             }
         }
 
@@ -286,9 +318,11 @@ try {
             if ($mcprSuccess) {
                 Write-Host 'MCPR completed.' -ForegroundColor Green
                 Write-Host 'A reboot is required to finish clearing McAfee drivers and services.' -ForegroundColor Yellow
+                $summaryRemoved.Add('McAfee leftover files and services (McAfee removal tool)')
             }
             else {
                 Write-Host 'MCPR did not complete successfully.' -ForegroundColor Red
+                $summaryFailed.Add('McAfee leftover cleanup (McAfee removal tool)')
             }
         }
 
@@ -314,9 +348,11 @@ try {
         $chromeSuccess = Install-ChromeEnterprise -LogPath $chromeLog
         if ($chromeSuccess) {
             Write-Host ' Done.' -ForegroundColor Green
+            $summaryInstalled.Add('Google Chrome Enterprise')
         }
         else {
             Write-Host ' FAILED.' -ForegroundColor Red
+            $summaryFailed.Add('Install Google Chrome Enterprise')
         }
     }
 
@@ -329,9 +365,11 @@ try {
         $adobeSuccess = Install-AdobeReader
         if ($adobeSuccess) {
             Write-Host ' Done.' -ForegroundColor Green
+            $summaryInstalled.Add('Adobe Acrobat Reader')
         }
         else {
             Write-Host ' FAILED.' -ForegroundColor Red
+            $summaryFailed.Add('Install Adobe Acrobat Reader')
         }
     }
 
@@ -348,8 +386,8 @@ try {
         else {
             Write-Host 'Downloading and installing Dropbox...' -NoNewline
             $dropboxSuccess = Install-Dropbox
-            if ($dropboxSuccess) { Write-Host ' Done.' -ForegroundColor Green }
-            else { Write-Host ' FAILED.' -ForegroundColor Red }
+            if ($dropboxSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Dropbox') }
+            else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Dropbox') }
         }
     }
 
@@ -360,8 +398,8 @@ try {
         else {
             Write-Host 'Downloading and installing Slack...' -NoNewline
             $slackSuccess = Install-Slack
-            if ($slackSuccess) { Write-Host ' Done.' -ForegroundColor Green }
-            else { Write-Host ' FAILED.' -ForegroundColor Red }
+            if ($slackSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Slack') }
+            else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Slack') }
         }
     }
 
@@ -372,8 +410,8 @@ try {
         else {
             Write-Host 'Downloading and installing Google Drive...' -NoNewline
             $googleDriveSuccess = Install-GoogleDrive
-            if ($googleDriveSuccess) { Write-Host ' Done.' -ForegroundColor Green }
-            else { Write-Host ' FAILED.' -ForegroundColor Red }
+            if ($googleDriveSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Google Drive') }
+            else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Google Drive') }
         }
     }
 
@@ -385,12 +423,66 @@ try {
             Write-Host "Installing Cisco Secure Client from $ciscoInstallerPath..." -NoNewline
             $ciscoLog = Join-Path $logDir "CiscoSecureClientInstall_$timestamp.log"
             $ciscoSuccess = Install-CiscoSecureClient -InstallerPath $ciscoInstallerPath -LogPath $ciscoLog
-            if ($ciscoSuccess) { Write-Host ' Done.' -ForegroundColor Green }
-            else { Write-Host ' FAILED.' -ForegroundColor Red }
+            if ($ciscoSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Cisco Secure Client') }
+            else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Cisco Secure Client') }
         }
     }
+
+    $runCompleted = $true
 }
 finally {
+    # --- Ticket summary: printed, copied to the clipboard, and saved to Logs ---
+    # Lives in finally so a run that dies partway still produces billable time
+    # and a record of what it got through.
+    $endTime = Get-Date
+    $actualMinutes = [int][math]::Ceiling(($endTime - $startTime).TotalMinutes)
+    $billedMinutes = [int]([math]::Ceiling(($endTime - $startTime).TotalMinutes / 15) * 15)
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("PC Onboarding Summary - $env:COMPUTERNAME")
+    $lines.Add("Start Time: $($startTime.ToString('M/d/yyyy h:mm tt'))")
+    $lines.Add("End Time:   $($endTime.ToString('M/d/yyyy h:mm tt'))")
+    $lines.Add("Runtime:    $(Format-Minutes $billedMinutes) (actual $(Format-Minutes $actualMinutes), rounded up to 15-min increments)")
+    if ($WhatIf) { $lines.Add('Dry run (-WhatIf): no changes were made.') }
+    if (-not $runCompleted) { $lines.Add('NOTE: The run stopped early because of an error. See the log for details.') }
+
+    $removed = @($summaryRemoved | Select-Object -Unique)
+    $installed = @($summaryInstalled | Select-Object -Unique)
+    $failedItems = @($summaryFailed | Select-Object -Unique)
+
+    if ($removed.Count -gt 0) {
+        $lines.Add('')
+        $lines.Add("Removed ($($removed.Count)):")
+        $removed | ForEach-Object { $lines.Add("  - $_") }
+    }
+    if ($installed.Count -gt 0) {
+        $lines.Add('')
+        $lines.Add("Installed ($($installed.Count)):")
+        $installed | ForEach-Object { $lines.Add("  - $_") }
+    }
+    if ($failedItems.Count -gt 0) {
+        $lines.Add('')
+        $lines.Add("Failed ($($failedItems.Count)):")
+        $failedItems | ForEach-Object { $lines.Add("  - $_") }
+    }
+
+    $summaryText = $lines -join [Environment]::NewLine
+    $summaryPath = Join-Path $logDir "Summary_$timestamp.txt"
+    Set-Content -Path $summaryPath -Value $summaryText
+
+    Write-Host "`n==================== Ticket Summary ====================" -ForegroundColor Cyan
+    Write-Host $summaryText
+    Write-Host '========================================================' -ForegroundColor Cyan
+
+    try {
+        Set-Clipboard -Value $summaryText
+        Write-Host 'Summary copied to the clipboard - paste it into the ticket.' -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Couldn't copy to the clipboard; the summary is saved at $summaryPath." -ForegroundColor Yellow
+    }
+    Write-Host "Summary saved to: $summaryPath"
+
     Stop-Transcript | Out-Null
     Write-Host "`nLog saved to: $transcriptPath"
 }
