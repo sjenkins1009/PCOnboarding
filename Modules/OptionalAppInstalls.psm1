@@ -3,7 +3,7 @@
     OptionalAppInstalls.psm1
     Silent, unattended installers for apps that are NOT installed by
     default during onboarding - only run when explicitly requested:
-    Dropbox, Slack, Google Drive, and Cisco Secure Client.
+    Dropbox, Slack, Google Drive, Cisco Secure Client, Firefox, and Zoom.
 #>
 
 function Install-Dropbox {
@@ -153,4 +153,67 @@ function Install-CiscoSecureClient {
     return ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010)
 }
 
-Export-ModuleMember -Function Install-Dropbox, Install-Slack, Install-GoogleDrive, Install-CiscoSecureClient
+function Install-MsiFromUrl {
+    # Shared download-then-msiexec path for vendors that publish a stable
+    # "latest MSI" link. Not exported.
+    param(
+        [Parameter(Mandatory)] [string]$AppName,
+        [Parameter(Mandatory)] [string]$Url,
+        [Parameter(Mandatory)] [string]$FileName,
+        [string]$DownloadDir = (Join-Path $env:ProgramData 'PCOnboarding\Downloads'),
+        [string]$LogPath
+    )
+
+    if (-not (Test-Path $DownloadDir)) { New-Item -Path $DownloadDir -ItemType Directory -Force | Out-Null }
+    $msiPath = Join-Path $DownloadDir $FileName
+
+    try {
+        Write-Verbose "Downloading $AppName from $Url"
+        $prevProgressPref = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $Url -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
+        $ProgressPreference = $prevProgressPref
+    }
+    catch {
+        Write-Warning "Failed to download ${AppName}: $_"
+        return $false
+    }
+
+    if (-not (Test-Path $msiPath) -or (Get-Item $msiPath).Length -eq 0) {
+        Write-Warning "$AppName download appears empty or missing."
+        return $false
+    }
+
+    $logArg = if ($LogPath) { "/l*v `"$LogPath`"" } else { '' }
+    $arguments = "/i `"$msiPath`" /qn /norestart $logArg"
+
+    Write-Verbose "Running: msiexec.exe $arguments"
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru
+    return ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010)
+}
+
+function Install-Firefox {
+    <#
+        Mozilla's "firefox-msi-latest-ssl" link always redirects to the
+        current 64-bit MSI.
+    #>
+    [CmdletBinding()]
+    param([string]$LogPath)
+
+    Install-MsiFromUrl -AppName 'Firefox' -FileName 'FirefoxSetup.msi' -LogPath $LogPath `
+        -Url 'https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US'
+}
+
+function Install-Zoom {
+    <#
+        Zoom's "client/latest" MSI link (the one Zoom documents for IT mass
+        deployment) always redirects to the current 64-bit Zoom Workplace MSI.
+    #>
+    [CmdletBinding()]
+    param([string]$LogPath)
+
+    Install-MsiFromUrl -AppName 'Zoom' -FileName 'ZoomInstallerFull.msi' -LogPath $LogPath `
+        -Url 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64'
+}
+
+Export-ModuleMember -Function Install-Dropbox, Install-Slack, Install-GoogleDrive, Install-CiscoSecureClient, Install-Firefox, Install-Zoom

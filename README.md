@@ -13,7 +13,7 @@ PowerShell-based onboarding tool. Asks a few questions up front, then runs:
 5. Download and silently install Google Chrome Enterprise.
 6. Download and silently install Adobe Acrobat Reader.
 7. Optional apps — **off by default**, only installed if you say yes at the
-   startup prompts: Dropbox, Slack, Google Drive, Cisco Secure Client.
+   startup prompts: Dropbox, Slack, Google Drive, Firefox, Zoom, Cisco Secure Client.
 
 ## Quick start on a new PC
 
@@ -74,7 +74,7 @@ Failed (1):
 - `Modules/BundledAppRemoval.psm1` — `Get-InstalledBundledApps` and `Remove-BundledAppInstallation` (Teams, new Outlook).
 - `Modules/McAfeeRemoval.psm1` — `Get-InstalledMcAfee`, `Remove-McAfeeInstallation`, and `Invoke-McAfeeRemovalTool` (downloads/runs MCPR).
 - `Modules/AppInstalls.psm1` — `Install-ChromeEnterprise` and `Install-AdobeReader`.
-- `Modules/OptionalAppInstalls.psm1` — `Install-Dropbox`, `Install-Slack`, `Install-GoogleDrive`, `Install-CiscoSecureClient`.
+- `Modules/OptionalAppInstalls.psm1` — `Install-Dropbox`, `Install-Slack`, `Install-GoogleDrive`, `Install-Firefox`, `Install-Zoom`, `Install-CiscoSecureClient`.
 - `Logs/` — transcript + per-product/app logs, one run per timestamp.
 
 ## Usage
@@ -114,7 +114,7 @@ Options 2 and 3 then ask for the domain name and pop up a sign-in box for an
 account that's allowed to join computers to it. Then it asks:
 
 ```
-Also install any optional apps (Dropbox, Slack, Google Drive, Cisco Secure Client)? (y/N)
+Also install any optional apps (Dropbox, Slack, Google Drive, Cisco Secure Client, Firefox, Zoom)? (y/N)
 ```
 
 Answer `N` (or just press Enter) to run only the default set. Answer `y` and
@@ -124,6 +124,8 @@ it asks about each app in turn:
   Install Dropbox? (y/N)
   Install Slack? (y/N)
   Install Google Drive? (y/N)
+  Install Firefox? (y/N)
+  Install Zoom? (y/N)
   Install Cisco Secure Client? (y/N)
     Path to the Cisco Secure Client installer (.msi)
 ```
@@ -324,7 +326,7 @@ reboot required) as success.
 ## Optional apps (step 7) — off by default
 
 None of these run unless you answer yes to them at the startup prompts (see
-Usage above). All three downloadable ones land in
+Usage above). All the downloadable ones land in
 `%ProgramData%\PCOnboarding\Downloads`, same as Chrome/Adobe.
 
 - **Dropbox**: downloads the official offline installer
@@ -339,6 +341,14 @@ Usage above). All three downloadable ones land in
   installer (`dl.google.com/drive-file-stream/GoogleDriveFSSetup.exe`,
   confirmed live), installs via `GoogleDriveFSSetup.exe --silent
   --desktop_shortcut --skip_launch_new`.
+- **Firefox**: downloads Mozilla's official MSI
+  (`download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US`
+  — always redirects to the current 64-bit release, confirmed live), installs
+  via `msiexec /i ... /qn /norestart`.
+- **Zoom**: downloads Zoom's official IT-deployment MSI
+  (`zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64` — always
+  redirects to the current 64-bit Zoom Workplace, confirmed live), installs
+  via `msiexec /i ... /qn /norestart`.
 - **Cisco Secure Client**: **cannot be auto-downloaded — you must supply the
   installer file.** Cisco gates it behind a Cisco.com account and your
   organization's own entitlement/VPN headend package; there's no generic

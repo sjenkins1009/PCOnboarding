@@ -19,7 +19,7 @@
       5. Download and silently install Google Chrome Enterprise.
       6. Download and silently install Adobe Acrobat Reader.
       7. Optional apps - prompted for interactively at startup (Dropbox,
-         Slack, Google Drive, Cisco Secure Client). Answering "no" to all
+         Slack, Google Drive, Cisco Secure Client, Firefox, Zoom). Answering "no" to all
          of them runs just the default set above.
 
     Usage:
@@ -159,12 +159,16 @@ $installDropbox = $false
 $installSlack = $false
 $installGoogleDrive = $false
 $installCisco = $false
+$installFirefox = $false
+$installZoom = $false
 $ciscoInstallerPath = $null
 
-if (Read-YesNo 'Also install any optional apps (Dropbox, Slack, Google Drive, Cisco Secure Client)?') {
+if (Read-YesNo 'Also install any optional apps (Dropbox, Slack, Google Drive, Cisco Secure Client, Firefox, Zoom)?') {
     $installDropbox = Read-YesNo '  Install Dropbox?'
     $installSlack = Read-YesNo '  Install Slack?'
     $installGoogleDrive = Read-YesNo '  Install Google Drive?'
+    $installFirefox = Read-YesNo '  Install Firefox?'
+    $installZoom = Read-YesNo '  Install Zoom?'
     $installCisco = Read-YesNo '  Install Cisco Secure Client?'
 
     if ($installCisco) {
@@ -572,7 +576,7 @@ try {
 
     Write-Step 'PC Onboarding - Step 7: Optional Applications'
 
-    if (-not $installDropbox -and -not $installSlack -and -not $installGoogleDrive -and -not $installCisco) {
+    if (-not ($installDropbox -or $installSlack -or $installGoogleDrive -or $installFirefox -or $installZoom -or $installCisco)) {
         Write-Host 'None selected. Skipping.' -ForegroundColor Green
     }
 
@@ -609,6 +613,30 @@ try {
             $googleDriveSuccess = Install-GoogleDrive
             if ($googleDriveSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Google Drive') }
             else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Google Drive') }
+        }
+    }
+
+    if ($installFirefox) {
+        if ($WhatIf) {
+            Write-Host '[WhatIf] Would download and install Firefox.' -ForegroundColor DarkYellow
+        }
+        else {
+            Write-Host 'Downloading and installing Firefox...' -NoNewline
+            $firefoxSuccess = Install-Firefox -LogPath (Join-Path $logDir "FirefoxInstall_$timestamp.log")
+            if ($firefoxSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Mozilla Firefox') }
+            else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Mozilla Firefox') }
+        }
+    }
+
+    if ($installZoom) {
+        if ($WhatIf) {
+            Write-Host '[WhatIf] Would download and install Zoom.' -ForegroundColor DarkYellow
+        }
+        else {
+            Write-Host 'Downloading and installing Zoom...' -NoNewline
+            $zoomSuccess = Install-Zoom -LogPath (Join-Path $logDir "ZoomInstall_$timestamp.log")
+            if ($zoomSuccess) { Write-Host ' Done.' -ForegroundColor Green; $summaryInstalled.Add('Zoom Workplace') }
+            else { Write-Host ' FAILED.' -ForegroundColor Red; $summaryFailed.Add('Install Zoom Workplace') }
         }
     }
 
