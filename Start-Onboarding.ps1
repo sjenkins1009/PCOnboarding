@@ -44,7 +44,8 @@ $transcriptPath = Join-Path $logDir "Onboarding_$timestamp.log"
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host 'Relaunching with administrator privileges...' -ForegroundColor Yellow
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"") + $args
+    # -NoExit keeps the elevated window open afterward so the summary can be read.
+    $argList = @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"") + $args
     Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs
     exit
 }

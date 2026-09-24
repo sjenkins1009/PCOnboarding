@@ -13,8 +13,21 @@ runs unattended:
 6. Optional apps — **off by default**, only installed if you say yes at the
    startup prompts: Dropbox, Slack, Google Drive, Cisco Secure Client.
 
+## Quick start on a new PC
+
+1. In a browser, sign in to GitHub (the repo is private) and go to
+   **https://github.com/sjenkins1009/PCOnboarding/releases/latest**.
+2. Download **PCOnboarding.zip** and extract it (right-click → Extract All).
+3. Open the extracted `PCOnboarding` folder and double-click
+   **`Run-Onboarding.cmd`**. Approve the admin (UAC) prompt.
+
+Windows may show a "Do you want to run this file?" warning for a downloaded
+file. Click **Run**. The window stays open after the run so you can read the
+summary.
+
 ## Structure
 
+- `Run-Onboarding.cmd` — double-click launcher for `Start-Onboarding.ps1` (no typed commands needed).
 - `Start-Onboarding.ps1` — entry point, self-elevates, runs the steps, logs progress.
 - `Modules/OfficeRemoval.psm1` — `Get-InstalledOffice` (scan) and `Remove-OfficeInstallation` (uninstall).
 - `Modules/BundledAppRemoval.psm1` — `Get-InstalledBundledApps` and `Remove-BundledAppInstallation` (Teams, new Outlook).
