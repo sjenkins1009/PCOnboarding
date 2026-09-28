@@ -14,9 +14,11 @@ PowerShell-based onboarding tool. Asks a few questions up front, then runs:
 6. Download and silently install Adobe Acrobat Reader.
 7. Optional apps — **off by default**, only installed if you say yes at the
    startup prompts: Dropbox, Slack, Google Drive, Firefox, Zoom, Cisco Secure Client.
-8. Windows Update — chosen at startup: install updates as part of the run
+8. Update drivers with the manufacturer's tool — Dell Command | Update on Dell,
+   Lenovo System Update on Lenovo (see [Driver updates](#driver-updates-step-8)).
+9. Windows Update — chosen at startup: install updates as part of the run
    (time counted, updates listed in the summary), or start them in the
-   background and finish right away (see [Windows Update](#windows-update-step-8)).
+   background and finish right away (see [Windows Update](#windows-update-step-9)).
 
 ## Quick start on a new PC
 
@@ -61,6 +63,8 @@ Windows Updates installed (2):
   - Security Intelligence Update for Microsoft Defender Antivirus (KB2267602)
 Failed (1):
   - Remove Microsoft OneNote - pt-br
+
+Drivers: updated with Dell Command | Update.
 ```
 
 If you chose to run Windows Update in the background instead, the updates
@@ -88,6 +92,7 @@ updates finish installing in the background.`
 - `Modules/McAfeeRemoval.psm1` — `Get-InstalledMcAfee`, `Remove-McAfeeInstallation`, and `Invoke-McAfeeRemovalTool` (downloads/runs MCPR).
 - `Modules/AppInstalls.psm1` — `Install-ChromeEnterprise` and `Install-AdobeReader`.
 - `Modules/OptionalAppInstalls.psm1` — `Install-Dropbox`, `Install-Slack`, `Install-GoogleDrive`, `Install-Firefox`, `Install-Zoom`, `Install-CiscoSecureClient`.
+- `Modules/DriverUpdates.psm1` — `Get-DeviceManufacturer`, `Update-DellDrivers`, `Update-LenovoDrivers`.
 - `Modules/WindowsUpdates.psm1` — `Get-PendingWindowsUpdate`, `Install-WindowsUpdateItem`, `Start-WindowsUpdateScan`.
 - `Logs/` — transcript + per-product/app logs, one run per timestamp.
 
@@ -156,7 +161,7 @@ Windows Update at the end of the run:
 Enter 1 or 2 (or just press Enter for 2)
 ```
 
-This is asked at startup (not when the run reaches step 8) so the run never
+This is asked at startup (not when the run reaches step 9) so the run never
 sits waiting on a prompt, with the clock running, after you've walked away.
 
 Aside from that startup Q&A, only two things can need someone at the
@@ -383,7 +388,39 @@ Usage above). All the downloadable ones land in
   `msiexec /i ... /qn /norestart` against it, same as the other MSI-based
   installs in this project.
 
-## Windows Update (step 8)
+## Driver updates (step 8)
+
+Runs automatically based on the PC's manufacturer. Other brands are skipped.
+
+- **Dell:** runs **Dell Command | Update**:
+  `dcu-cli.exe /applyUpdates -updateType=driver -reboot=disable -silent`.
+  Its log is saved in `Logs\`. It reports whether updates were installed,
+  nothing was needed, or a restart is required.
+- **Lenovo:** runs **Lenovo System Update**:
+  `tvsu.exe /CM -search A -action INSTALL -packagetypes 2 -includerebootpackages 3 -noreboot -noicon -nolicense`.
+  `-packagetypes 2` means drivers only. Updates that restart or shut the PC
+  down on their own are left out so the run isn't cut off. System Update has
+  no exit codes, so the summary can say it ran but not exactly what it
+  installed.
+
+Details:
+
+- **Drivers only:** BIOS and firmware aren't included on either brand.
+- **Getting the tool:** if it isn't already on the PC, it's installed with
+  **winget**, Microsoft's package manager built into Windows 10/11. Neither
+  vendor has a permanent "latest version" download link. Winget always
+  resolves the current installer and verifies its hash. If the tool was
+  installed this run, it's listed under **Installed** in the ticket summary.
+- **Unsupported models:** Dell Command | Update covers Dell's business lines
+  (Latitude, OptiPlex, Precision, XPS). Lenovo System Update only covers
+  ThinkPad, ThinkCentre, and ThinkStation. Consumer models (Inspiron, IdeaPad,
+  Yoga, Legion) use SupportAssist or Lenovo Vantage instead. The script notes
+  this rather than failing.
+- **Winget missing:** on a very fresh PC, winget can be unavailable until the
+  Microsoft Store has updated App Installer. If it's missing, the step shows
+  under **Failed** and everything else still runs.
+
+## Windows Update (step 9)
 
 Which mode runs is chosen at startup.
 

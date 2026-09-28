@@ -21,7 +21,10 @@
       7. Optional apps - prompted for interactively at startup (Dropbox,
          Slack, Google Drive, Cisco Secure Client, Firefox, Zoom). Answering "no" to all
          of them runs just the default set above.
-      8. Windows Update - chosen at startup: install updates as part of the
+      8. Driver updates from the manufacturer's tool: Dell Command | Update on
+         Dell, Lenovo System Update on Lenovo (installed via winget if
+         missing). Other brands are skipped.
+      9. Windows Update - chosen at startup: install updates as part of the
          run (time counted, updates listed in the summary), or start a
          "Check for updates" and let them finish in the background.
 
@@ -69,6 +72,7 @@ Import-Module (Join-Path $scriptRoot 'Modules\BundledAppRemoval.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\McAfeeRemoval.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\AppInstalls.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\OptionalAppInstalls.psm1') -Force
+Import-Module (Join-Path $scriptRoot 'Modules\DriverUpdates.psm1') -Force
 Import-Module (Join-Path $scriptRoot 'Modules\WindowsUpdates.psm1') -Force
 
 function Write-Step {
@@ -127,12 +131,13 @@ $restartNeeded = $false
 $renamed = $false
 $updatesStarted = $false
 $summaryUpdates = [System.Collections.Generic.List[string]]::new()
+$summaryNotes = [System.Collections.Generic.List[string]]::new()
 $updatesChecked = $false
 $runCompleted = $false
 
 # --- Ask up front: default set only, or also optional apps? ---
 Write-Step 'PC Onboarding Setup'
-Write-Host 'Always runs: remove Office, remove preloaded Teams/new Outlook, remove McAfee, install Google Chrome Enterprise, install Adobe Acrobat Reader.'
+Write-Host 'Always runs: remove Office, remove preloaded Teams/new Outlook, remove McAfee, install Google Chrome Enterprise, install Adobe Acrobat Reader, update Dell/Lenovo drivers.'
 
 $joinStatus = Get-JoinStatus
 
@@ -671,7 +676,56 @@ try {
         }
     }
 
-    Write-Step 'PC Onboarding - Step 8: Windows Update'
+    Write-Step 'PC Onboarding - Step 8: Manufacturer Driver Updates'
+    $device = Get-DeviceManufacturer
+
+    if ($device.Vendor -eq 'Other') {
+        Write-Host "This PC is made by $($device.Manufacturer), not Dell or Lenovo. Skipping." -ForegroundColor Green
+    }
+    else {
+        $driverTool = if ($device.Vendor -eq 'Dell') { 'Dell Command | Update' } else { 'Lenovo System Update' }
+
+        if ($WhatIf) {
+            Write-Host "[WhatIf] Would run $driverTool for driver updates on this $($device.Manufacturer) $($device.Model)." -ForegroundColor DarkYellow
+        }
+        else {
+            Write-Host "$($device.Manufacturer) $($device.Model) detected. Running $driverTool for driver updates (this can take a while)..."
+            $driverResult = if ($device.Vendor -eq 'Dell') {
+                Update-DellDrivers -LogPath (Join-Path $logDir "DellCommandUpdate_$timestamp.log")
+            }
+            else {
+                Update-LenovoDrivers -Model $device.Model
+            }
+
+            if ($driverResult.ToolInstalled) { $summaryInstalled.Add($driverTool) }
+            if ($driverResult.RebootRequired) { $restartNeeded = $true }
+
+            switch ($driverResult.Status) {
+                'Updated' {
+                    Write-Host $driverResult.Detail -ForegroundColor Green
+                    $summaryNotes.Add("Drivers: updated with $driverTool.")
+                }
+                'UpToDate' {
+                    Write-Host $driverResult.Detail -ForegroundColor Green
+                    $summaryNotes.Add("Drivers: already up to date ($driverTool).")
+                }
+                'Ran' {
+                    Write-Host $driverResult.Detail -ForegroundColor Green
+                    $summaryNotes.Add("Drivers: checked and updated with $driverTool.")
+                }
+                'NotSupported' {
+                    Write-Host $driverResult.Detail -ForegroundColor Yellow
+                    $summaryNotes.Add("Drivers: $($driverResult.Detail)")
+                }
+                default {
+                    Write-Host $driverResult.Detail -ForegroundColor Red
+                    $summaryFailed.Add("Driver updates: $($driverResult.Detail)")
+                }
+            }
+        }
+    }
+
+    Write-Step 'PC Onboarding - Step 9: Windows Update'
     if ($installUpdatesInRun) {
         if ($WhatIf) {
             Write-Host '[WhatIf] Would check for and install Windows updates as part of the run.' -ForegroundColor DarkYellow
@@ -785,6 +839,10 @@ finally {
         $failedItems | ForEach-Object { $lines.Add("  - $_") }
     }
 
+    if ($summaryNotes.Count -gt 0) {
+        $lines.Add('')
+        $summaryNotes | ForEach-Object { $lines.Add($_) }
+    }
     if ($updatesStarted) {
         $lines.Add('')
         $lines.Add('Windows Update: started at the end of the run; updates finish installing in the background.')
